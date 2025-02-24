@@ -27,16 +27,29 @@ class SmoothTopKGate(nn.Module):
         Using an iterative approach.
         """
         batch_size = s.shape[0]
-        theta = torch.zeros(batch_size, device=s.device)
-        
-        for _ in range(10):  # Newton-Raphson iterations
-            sigma = torch.sigmoid((s - theta.unsqueeze(1)) / self.tau)
-            sum_sigma = sigma.sum(dim=1)
+
+        max_iter = 100        
+        tol=1e-3
+        theta = torch.median(s, dim=-1, keepdim=True)[0]  # Initialize theta with median of scores
+        sorted_s, _ = torch.sort(s, dim=-1)
+        theta = sorted_s[:, -self.k-1].unsqueeze(-1)
+        # theta = theta.unsqueeze_(-1)  # Shape (batch_size, 1)
+        for _ in range(max_iter):
+            # Compute sigmoid mask
+            sigmoid_mask = torch.sigmoid((s - theta) / self.tau)
+            # Compute f(theta)
+            f_theta = sigmoid_mask.sum(dim=-1, keepdim=True) - k
+            # Check for convergence
+            if torch.mean(f_theta) < tol:
+                break
             
-            # Newton step update
-            theta = theta + self.tau * (sum_sigma - self.k)
-        
-        return theta.unsqueeze(1)  # Shape (batch_size, 1)
+            # Compute f'(theta)
+            df_theta = -(1 / self.tau) * (sigmoid_mask * (1 - sigmoid_mask)).sum(dim=-1, keepdim=True)
+            
+            # Update theta
+            theta = theta - f_theta / df_theta
+            # print(s-theta)
+        return theta  # Shape (batch_size, 1)
     
 class SoftTopKGate(nn.Module):
     def __init__(self, s_dim, k, tau=1e-2):
@@ -61,7 +74,8 @@ class TwoLayerMLP(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, s_dim)
         )
-        self.gate = SoftTopKGate(s_dim, k, tau)
+        # self.gate = SoftTopKGate(s_dim, k, tau)
+        self.gate = SmoothTopKGate(s_dim, k, tau)
     
     def forward(self, x):
         s = self.mlp(x)
@@ -94,6 +108,7 @@ for i in range(batch_size):
     top_k_sum = g_sorted[-k-4:].sum()
     if top_k_sum > 0:  # Avoid division by zero
         print(f"Ratio: {g_sorted[-k-4]/top_k_sum:.5f}")
+    print(sum(g[i]))
 
 # # Plot histograms in a grid
 # fig, axes = plt.subplots(4, 4, figsize=(20, 10))
